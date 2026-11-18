@@ -5,6 +5,7 @@ import com.example.uwbextracredit4377.data.TrackingMode
 data class TrackerUiState(
     val mode: TrackingMode = TrackingMode.SIMULATED,
     val isLiveTrackingActive: Boolean = false,
+    val isPhoneController: Boolean = false,
     val rawDistanceMeters: Float? = null,
     val smoothedDistanceMeters: Float? = null,
     val proximityZone: ProximityZone? = null,

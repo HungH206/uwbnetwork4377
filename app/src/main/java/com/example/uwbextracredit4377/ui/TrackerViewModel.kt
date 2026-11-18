@@ -44,7 +44,14 @@ class TrackerViewModel(
 
     fun toggleMode(useLive: Boolean) {
         val newMode = if (useLive) TrackingMode.LIVE_HARDWARE else TrackingMode.SIMULATED
-        startTracking(newMode)
+        startTracking(newMode, _uiState.value.isPhoneController)
+    }
+
+    fun togglePhoneRole(asController: Boolean) {
+        _uiState.update { it.copy(isPhoneController = asController) }
+        if (_uiState.value.mode == TrackingMode.LIVE_HARDWARE) {
+            startTracking(TrackingMode.LIVE_HARDWARE, asController)
+        }
     }
 
     fun fallbackToSimulated(reason: String) {
@@ -54,14 +61,14 @@ class TrackerViewModel(
                 errorMessage = reason
             )
         }
-        startTracking(TrackingMode.SIMULATED)
+        startTracking(TrackingMode.SIMULATED, false)
     }
 
     fun clearError() {
         _uiState.update { it.copy(errorMessage = null) }
     }
 
-    private fun startTracking(mode: TrackingMode) {
+    private fun startTracking(mode: TrackingMode, asController: Boolean = false) {
         rangingJob?.cancel()
         rollingWindow.clear()
 
@@ -69,19 +76,29 @@ class TrackerViewModel(
             current.copy(
                 mode = mode,
                 isLiveTrackingActive = mode == TrackingMode.LIVE_HARDWARE,
+                isPhoneController = asController,
                 statusMessage = if (mode == TrackingMode.SIMULATED) {
                     "Simulated Mode Active (0.3m – 3.5m cycling)"
                 } else {
-                    "Connecting to Qorvo DWM3001CDK (Channel 9, Preamble 10)..."
+                    "Connecting to Qorvo DWM3001CDK (${if (asController) "Phone: Controller" else "Phone: Controlee"})..."
                 },
                 errorMessage = null
             )
         }
 
         rangingJob = viewModelScope.launch {
-            repository.startRanging(mode, _uiState.value.peerAddressInput)
+            repository.startRanging(mode, _uiState.value.peerAddressInput, asController)
                 .collect { state ->
                     when (state) {
+                        is RangingState.Opened -> {
+                            _uiState.update { current ->
+                                current.copy(
+                                    localAddress = state.localAddress,
+                                    statusMessage = "Session Opened. Waiting for Qorvo peer..."
+                                )
+                            }
+                        }
+
                         is RangingState.Active -> {
                             // Update 5-sample rolling window
                             if (rollingWindow.size >= 5) {

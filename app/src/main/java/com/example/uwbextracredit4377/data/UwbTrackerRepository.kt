@@ -56,14 +56,15 @@ class UwbTrackerRepository(
     @OptIn(ExperimentalCoroutinesApi::class)
     fun startRanging(
         mode: TrackingMode,
-        peerAddressStr: String = "00:00"
+        peerAddressStr: String = "00:00",
+        asController: Boolean = false
     ): Flow<RangingState> = flow {
         when (mode) {
             TrackingMode.SIMULATED -> {
                 emitAll(createSimulatedFlow(peerAddressStr))
             }
             TrackingMode.LIVE_HARDWARE -> {
-                emitAll(createLiveHardwareFlow(peerAddressStr))
+                emitAll(createLiveHardwareFlow(peerAddressStr, asController))
             }
         }
     }
@@ -102,14 +103,19 @@ class UwbTrackerRepository(
 
     /**
      * Live Hardware Mode:
-     * Uses UwbManager.createInstance(context).controleeSessionScope() configured for FiRa unicast DS-TWR
-     * (CONFIG_UNICAST_DS_TWR, Channel 9, Preamble 10, Session ID 42),
-     * reads localAddress formatted as hex bytes (XX:XX), and maps RangingResultPosition distance updates.
+     * Supports both Controller (Initiator) and Controlee (Responder) roles.
      */
-    private fun createLiveHardwareFlow(peerAddressStr: String): Flow<RangingState> = flow {
+    private fun createLiveHardwareFlow(
+        peerAddressStr: String,
+        asController: Boolean = false
+    ): Flow<RangingState> = flow {
         val uwbManager = UwbManager.createInstance(context)
-        val controleeSession = try {
-            uwbManager.controleeSessionScope()
+        val sessionScope = try {
+            if (asController) {
+                uwbManager.controllerSessionScope()
+            } else {
+                uwbManager.controleeSessionScope()
+            }
         } catch (e: UwbHardwareNotAvailableException) {
             emit(RangingState.Error("UWB hardware is not available on this device.", e))
             return@flow
@@ -120,20 +126,24 @@ class UwbTrackerRepository(
             emit(RangingState.Error("UWB permission denied. Missing UWB_RANGING permission.", e))
             return@flow
         } catch (e: Exception) {
-            emit(RangingState.Error("Failed to initialize UWB controlee session: ${e.message}", e))
+            emit(RangingState.Error("Failed to initialize UWB session: ${e.message}", e))
             return@flow
         }
 
-        val localAddressFormatted = formatAddress(controleeSession.localAddress.address)
+        val localAddressFormatted = formatAddress(sessionScope.localAddress.address)
         val peerAddressBytes = parseAddress(peerAddressStr)
         val peerAddressFormatted = formatAddress(peerAddressBytes)
 
-        // FiRa unicast DS-TWR parameters:
-        // CONFIG_UNICAST_DS_TWR requires an 8-byte sessionKeyInfo for Static STS:
-        // first 2 bytes Vendor ID, next 6 bytes STATIC_STS_IV
+        android.util.Log.d("UWB_LIVE", "Session as Controller: $asController | Local: $localAddressFormatted | Peer: $peerAddressFormatted")
+
+        // Immediately emit Opened state so UI immediately shows the real hardware MAC address!
+        emit(RangingState.Opened(localAddress = localAddressFormatted, peerAddress = peerAddressFormatted))
+
+        // FiRa unicast DS-TWR parameters matching Qorvo QM33 UCI specification:
+        // Vendor ID 0x0708 in little-endian (0x08, 0x07) followed by STATIC_STS_IV (0x01..0x06)
         val staticStsKey = byteArrayOf(
-            0x07, 0x08, // Vendor ID
-            0x01, 0x02, 0x03, 0x04, 0x05, 0x06 // STATIC_STS_IV
+            0x08.toByte(), 0x07.toByte(), // Vendor ID 0x0708
+            0x01.toByte(), 0x02.toByte(), 0x03.toByte(), 0x04.toByte(), 0x05.toByte(), 0x06.toByte() // STATIC_STS_IV
         )
 
         val parameters = RangingParameters(
@@ -142,48 +152,56 @@ class UwbTrackerRepository(
             subSessionId = 0,
             sessionKeyInfo = staticStsKey,
             subSessionKeyInfo = null,
-            complexChannel = UwbComplexChannel(channel = 9, preambleIndex = 10),
+            complexChannel = UwbComplexChannel(channel = 9, preambleIndex = 9),
             peerDevices = listOf(UwbDevice(UwbAddress(peerAddressBytes))),
             updateRateType = RangingParameters.RANGING_UPDATE_RATE_FREQUENT
         )
 
-        try {
-            controleeSession.prepareSession(parameters)
-                .mapNotNull { result ->
-                    when (result) {
-                        is RangingResult.RangingResultPosition -> {
-                            val distanceMeasurement = result.position.distance
-                            if (distanceMeasurement != null) {
-                                RangingState.Active(
-                                    distanceMeters = distanceMeasurement.value,
-                                    azimuthDegrees = result.position.azimuth?.value,
-                                    elevationDegrees = result.position.elevation?.value,
-                                    peerAddress = formatAddress(result.device.address.address),
-                                    localAddress = localAddressFormatted,
-                                    isSimulated = false,
-                                    timestampNanos = result.position.elapsedRealtimeNanos
-                                )
-                            } else {
-                                null
+        while (currentCoroutineContext().isActive) {
+            try {
+                sessionScope.prepareSession(parameters)
+                    .mapNotNull { result ->
+                        android.util.Log.d("UWB_LIVE", "Ranging Result received: $result")
+                        when (result) {
+                            is RangingResult.RangingResultPosition -> {
+                                val distanceMeasurement = result.position.distance
+                                if (distanceMeasurement != null) {
+                                    android.util.Log.d("UWB_LIVE", "Distance: ${distanceMeasurement.value} m")
+                                    RangingState.Active(
+                                        distanceMeters = distanceMeasurement.value,
+                                        azimuthDegrees = result.position.azimuth?.value,
+                                        elevationDegrees = result.position.elevation?.value,
+                                        peerAddress = formatAddress(result.device.address.address),
+                                        localAddress = localAddressFormatted,
+                                        isSimulated = false,
+                                        timestampNanos = result.position.elapsedRealtimeNanos
+                                    )
+                                } else {
+                                    null
+                                }
                             }
+                            is RangingResult.RangingResultPeerDisconnected -> {
+                                android.util.Log.d("UWB_LIVE", "Peer Disconnected: ${formatAddress(result.device.address.address)}")
+                                RangingState.PeerDisconnected(
+                                    peerAddress = formatAddress(result.device.address.address),
+                                    localAddress = localAddressFormatted
+                                )
+                            }
+                            else -> null
                         }
-                        is RangingResult.RangingResultPeerDisconnected -> {
-                            RangingState.PeerDisconnected(
-                                peerAddress = formatAddress(result.device.address.address),
-                                localAddress = localAddressFormatted
-                            )
-                        }
-                        else -> null
                     }
-                }
-                .catch { cause ->
-                    emit(RangingState.Error("UWB session error: ${cause.message}", cause))
-                }
-                .collect { rangingState ->
-                    emit(rangingState)
-                }
-        } catch (e: Exception) {
-            emit(RangingState.Error("Error during UWB ranging session: ${e.message}", e))
+                    .catch { cause ->
+                        android.util.Log.e("UWB_LIVE", "Session error: ${cause.message}", cause)
+                        emit(RangingState.Error("UWB session error: ${cause.message}", cause))
+                    }
+                    .collect { rangingState ->
+                        emit(rangingState)
+                    }
+            } catch (e: Exception) {
+                android.util.Log.e("UWB_LIVE", "Exception preparing session: ${e.message}", e)
+                emit(RangingState.Error("Error during UWB ranging session: ${e.message}", e))
+                break
+            }
         }
     }
 }

@@ -52,6 +52,7 @@ import com.example.uwbextracredit4377.data.TrackingMode
 fun TrackerDashboard(
     uiState: TrackerUiState,
     onToggleMode: (Boolean) -> Unit,
+    onTogglePhoneRole: (Boolean) -> Unit,
     onPeerAddressChanged: (String) -> Unit,
     onRequestPermissions: () -> Unit,
     hasPermissions: Boolean,
@@ -95,13 +96,14 @@ fun TrackerDashboard(
             // Mode Selector Card
             ModeToggleCard(
                 mode = uiState.mode,
-                hasPermissions = hasPermissions,
+                isPhoneController = uiState.isPhoneController,
                 onToggle = { isChecked ->
                     if (isChecked && !hasPermissions) {
                         onRequestPermissions()
                     }
                     onToggleMode(isChecked)
-                }
+                },
+                onRoleToggle = onTogglePhoneRole
             )
 
             // Warning Banner if permission or hardware error occurred
@@ -134,7 +136,6 @@ fun TrackerDashboard(
 
             // Session Configuration & Status Card
             HardwareInfoCard(
-                mode = uiState.mode,
                 statusMessage = uiState.statusMessage
             )
         }
@@ -144,8 +145,9 @@ fun TrackerDashboard(
 @Composable
 private fun ModeToggleCard(
     mode: TrackingMode,
-    hasPermissions: Boolean,
-    onToggle: (Boolean) -> Unit
+    isPhoneController: Boolean,
+    onToggle: (Boolean) -> Unit,
+    onRoleToggle: (Boolean) -> Unit
 ) {
     ElevatedCard(
         shape = RoundedCornerShape(16.dp),
@@ -154,50 +156,84 @@ private fun ModeToggleCard(
         ),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+                .padding(16.dp)
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(10.dp)
-                            .clip(CircleShape)
-                            .background(
-                                if (mode == TrackingMode.LIVE_HARDWARE) Color(0xFF2E7D32) else Color(0xFF1976D2)
-                            )
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (mode == TrackingMode.LIVE_HARDWARE) Color(0xFF2E7D32) else Color(0xFF1976D2)
+                                )
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (mode == TrackingMode.LIVE_HARDWARE) "Live Qorvo UWB" else "Simulated Mode",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = if (mode == TrackingMode.LIVE_HARDWARE) "Live Qorvo UWB" else "Simulated Mode",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
+                        text = if (mode == TrackingMode.LIVE_HARDWARE) {
+                            "DWM3001CDK (Channel 9, Preamble 9, Session 42)"
+                        } else {
+                            "Default: Cycling 0.3m – 3.5m at 5 Hz (No board needed)"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = if (mode == TrackingMode.LIVE_HARDWARE) {
-                        "Connected to DWM3001CDK (Channel 9, Preamble 10)"
-                    } else {
-                        "Default: Cycling 0.3m – 3.5m at 5 Hz (No board needed)"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+
+                Switch(
+                    checked = mode == TrackingMode.LIVE_HARDWARE,
+                    onCheckedChange = onToggle,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = MaterialTheme.colorScheme.primary,
+                        checkedTrackColor = MaterialTheme.colorScheme.primaryContainer
+                    )
                 )
             }
 
-            Switch(
-                checked = mode == TrackingMode.LIVE_HARDWARE,
-                onCheckedChange = onToggle,
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = MaterialTheme.colorScheme.primary,
-                    checkedTrackColor = MaterialTheme.colorScheme.primaryContainer
-                )
-            )
+            if (mode == TrackingMode.LIVE_HARDWARE) {
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "Phone Role: ${if (isPhoneController) "Controller (Initiator)" else "Controlee (Responder)"}",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = if (isPhoneController) "Phone sends Poll -> Board replies" else "Board sends Poll -> Phone replies",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    Switch(
+                        checked = isPhoneController,
+                        onCheckedChange = onRoleToggle
+                    )
+                }
+            }
         }
     }
 }
@@ -435,7 +471,6 @@ private fun ZoneIndicatorPill(zone: ProximityZone, isCurrent: Boolean) {
 
 @Composable
 private fun HardwareInfoCard(
-    mode: TrackingMode,
     statusMessage: String
 ) {
     Card(
@@ -471,7 +506,7 @@ private fun HardwareInfoCard(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(text = "RF Channel / Preamble:", style = MaterialTheme.typography.bodySmall)
-                Text(text = "Channel 9 / Preamble 10", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                Text(text = "Channel 9 / Preamble 9", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
             }
 
             Row(

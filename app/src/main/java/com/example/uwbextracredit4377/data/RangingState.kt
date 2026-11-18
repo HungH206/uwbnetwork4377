@@ -3,6 +3,11 @@ package com.example.uwbextracredit4377.data
 sealed interface RangingState {
     data object Idle : RangingState
 
+    data class Opened(
+        val localAddress: String,
+        val peerAddress: String
+    ) : RangingState
+
     data class Active(
         val distanceMeters: Float,
         val azimuthDegrees: Float? = null,
