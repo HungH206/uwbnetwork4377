@@ -1,6 +1,7 @@
 package com.example.uwbextracredit4377.data
 
 import android.content.Context
+import android.content.pm.PackageManager
 import androidx.core.uwb.RangingParameters
 import androidx.core.uwb.RangingResult
 import androidx.core.uwb.UwbAddress
@@ -11,18 +12,11 @@ import androidx.core.uwb.exceptions.UwbHardwareNotAvailableException
 import androidx.core.uwb.exceptions.UwbServiceNotAvailableException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.isActive
-import kotlin.math.sin
-
-enum class TrackingMode {
-    SIMULATED,
-    LIVE_HARDWARE
-}
 
 class UwbTrackerRepository(
     private val context: Context
@@ -51,54 +45,21 @@ class UwbTrackerRepository(
     }
 
     /**
-     * Main tracking Flow that switches between Simulated mode and Live Hardware mode.
+     * Checks if the device has the physical UWB hardware feature.
      */
-    @OptIn(ExperimentalCoroutinesApi::class)
-    fun startRanging(
-        mode: TrackingMode,
-        peerAddressStr: String = "00:00",
-        asController: Boolean = false
-    ): Flow<RangingState> = flow {
-        when (mode) {
-            TrackingMode.SIMULATED -> {
-                emitAll(createSimulatedFlow(peerAddressStr))
-            }
-            TrackingMode.LIVE_HARDWARE -> {
-                emitAll(createLiveHardwareFlow(peerAddressStr, asController))
-            }
-        }
+    fun isUwbSupported(): Boolean {
+        return context.packageManager.hasSystemFeature(PackageManager.FEATURE_UWB)
     }
 
     /**
-     * Emits smooth distance readings cycling between 0.3m and 3.5m at 5 Hz (every 200ms).
+     * Start live UWB hardware ranging session with Qorvo DWM3001CDK.
+     * Operates purely on live hardware (Phone Controller / Initiator).
      */
-    fun createSimulatedFlow(peerAddressStr: String = "00:00"): Flow<RangingState> = flow {
-        val localAddress = "34:12"
-        val cleanPeerAddress = formatAddress(parseAddress(peerAddressStr))
-        var step = 0.0
-
-        // Cycling smoothly between 0.3m and 3.5m:
-        // Midpoint = (3.5 + 0.3) / 2 = 1.9m
-        // Amplitude = (3.5 - 0.3) / 2 = 1.6m
-        // Sine wave: distance = 1.9 + 1.6 * sin(step)
-        while (currentCoroutineContext().isActive) {
-            val distance = (1.9 + 1.6 * sin(step)).toFloat()
-            // Add a tiny pseudo-random variation (+-2cm) to simulate realistic sensor jitter
-            val jitter = (((step.hashCode() % 100) / 100.0f) - 0.5f) * 0.04f
-            val distanceWithJitter = (distance + jitter).coerceIn(0.3f, 3.5f)
-
-            emit(
-                RangingState.Active(
-                    distanceMeters = distanceWithJitter,
-                    azimuthDegrees = (sin(step * 0.5) * 35.0).toFloat(),
-                    peerAddress = cleanPeerAddress,
-                    localAddress = localAddress,
-                    isSimulated = true
-                )
-            )
-            step += 0.15
-            delay(200) // 5 Hz
-        }
+    fun startRanging(
+        peerAddressStr: String = "00:00",
+        asController: Boolean = true
+    ): Flow<RangingState> = flow {
+        emitAll(createLiveHardwareFlow(peerAddressStr, asController))
     }
 
     /**

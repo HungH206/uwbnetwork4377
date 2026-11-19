@@ -1,10 +1,8 @@
 package com.example.uwbextracredit4377.ui
 
-import android.app.Application
-import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.uwbextracredit4377.data.RangingState
-import com.example.uwbextracredit4377.data.TrackingMode
 import com.example.uwbextracredit4377.data.UwbTrackerRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -14,87 +12,96 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 class TrackerViewModel(
-    application: Application
-) : AndroidViewModel(application) {
-
-    private val repository = UwbTrackerRepository(application.applicationContext)
+    private val repository: UwbTrackerRepository
+) : ViewModel() {
 
     private val _uiState = MutableStateFlow(TrackerUiState())
     val uiState: StateFlow<TrackerUiState> = _uiState.asStateFlow()
 
-    // 5-sample rolling buffer for jitter filtering
-    private val rollingWindow = ArrayDeque<Float>(5)
-    // Distance history for the live sparkline/bar indicator (last 20 samples)
-    private val historyPoints = ArrayDeque<Float>(20)
-
     private var rangingJob: Job? = null
 
+    // Rolling window buffer of size 5 for noise reduction
+    private val rollingWindow = ArrayDeque<Float>(5)
+
+    // Sparkline history buffer of 20 samples
+    private val historyPoints = ArrayDeque<Float>(20)
+
     init {
-        // Start in Simulated Mode by default on launch
-        startTracking(TrackingMode.SIMULATED)
-    }
-
-    fun setPeerAddress(address: String) {
-        _uiState.update { it.copy(peerAddressInput = address) }
-        // If live tracking is running, restart session with the new peer address
-        if (_uiState.value.mode == TrackingMode.LIVE_HARDWARE) {
-            startTracking(TrackingMode.LIVE_HARDWARE)
-        }
-    }
-
-    fun toggleMode(useLive: Boolean) {
-        val newMode = if (useLive) TrackingMode.LIVE_HARDWARE else TrackingMode.SIMULATED
-        startTracking(newMode, _uiState.value.isPhoneController)
-    }
-
-    fun togglePhoneRole(asController: Boolean) {
-        _uiState.update { it.copy(isPhoneController = asController) }
-        if (_uiState.value.mode == TrackingMode.LIVE_HARDWARE) {
-            startTracking(TrackingMode.LIVE_HARDWARE, asController)
-        }
-    }
-
-    fun fallbackToSimulated(reason: String) {
+        // Automatically check UWB hardware capability and start session
         _uiState.update {
             it.copy(
-                mode = TrackingMode.SIMULATED,
-                errorMessage = reason
+                hasUwbHardware = repository.isUwbSupported(),
+                isLiveTrackingActive = true
             )
         }
-        startTracking(TrackingMode.SIMULATED, false)
+        startTracking()
+    }
+
+    fun setPeerAddress(newAddress: String) {
+        _uiState.update { it.copy(peerAddressInput = newAddress) }
+        if (_uiState.value.isLiveTrackingActive) {
+            startTracking()
+        }
+    }
+
+    fun toggleTracking(isActive: Boolean) {
+        if (isActive) {
+            startTracking()
+        } else {
+            stopTracking()
+        }
     }
 
     fun clearError() {
         _uiState.update { it.copy(errorMessage = null) }
     }
 
-    private fun startTracking(mode: TrackingMode, asController: Boolean = false) {
+    private fun stopTracking() {
         rangingJob?.cancel()
         rollingWindow.clear()
+        historyPoints.clear()
+
+        _uiState.update {
+            it.copy(
+                isLiveTrackingActive = false,
+                isConnected = false,
+                rawDistanceMeters = null,
+                smoothedDistanceMeters = null,
+                proximityZone = null,
+                distanceHistory = emptyList(),
+                statusMessage = "Tracking Paused",
+                errorMessage = null
+            )
+        }
+    }
+
+    private fun startTracking() {
+        rangingJob?.cancel()
+        rollingWindow.clear()
+        historyPoints.clear()
 
         _uiState.update { current ->
             current.copy(
-                mode = mode,
-                isLiveTrackingActive = mode == TrackingMode.LIVE_HARDWARE,
-                isPhoneController = asController,
-                statusMessage = if (mode == TrackingMode.SIMULATED) {
-                    "Simulated Mode Active (0.3m – 3.5m cycling)"
-                } else {
-                    "Connecting to Qorvo DWM3001CDK (${if (asController) "Phone: Controller" else "Phone: Controlee"})..."
-                },
+                isLiveTrackingActive = true,
+                isConnected = false,
+                rawDistanceMeters = null,
+                smoothedDistanceMeters = null,
+                proximityZone = null,
+                distanceHistory = emptyList(),
+                statusMessage = "Session Initializing...",
                 errorMessage = null
             )
         }
 
         rangingJob = viewModelScope.launch {
-            repository.startRanging(mode, _uiState.value.peerAddressInput, asController)
+            repository.startRanging(_uiState.value.peerAddressInput, asController = true)
                 .collect { state ->
                     when (state) {
                         is RangingState.Opened -> {
                             _uiState.update { current ->
                                 current.copy(
                                     localAddress = state.localAddress,
-                                    statusMessage = "Session Opened. Waiting for Qorvo peer..."
+                                    statusMessage = "Session Active • Waiting for Qorvo Board..."
                                 )
                             }
                         }
@@ -117,28 +124,29 @@ class TrackerViewModel(
 
                             _uiState.update { current ->
                                 current.copy(
+                                    isConnected = true,
                                     rawDistanceMeters = state.distanceMeters,
                                     smoothedDistanceMeters = smoothedDistance,
                                     proximityZone = zone,
                                     distanceHistory = historyPoints.toList(),
                                     localAddress = state.localAddress,
                                     azimuthDegrees = state.azimuthDegrees,
-                                    statusMessage = if (state.isSimulated) {
-                                        "Simulated Ranging (5 Hz active)"
-                                    } else {
-                                        "Live Qorvo Ranging Active (Peer: ${state.peerAddress})"
-                                    },
+                                    statusMessage = "Live Qorvo Ranging Active (Peer: ${state.peerAddress})",
                                     errorMessage = null
                                 )
                             }
                         }
 
                         is RangingState.PeerDisconnected -> {
+                            rollingWindow.clear()
                             _uiState.update { current ->
                                 current.copy(
-                                    localAddress = state.localAddress,
-                                    statusMessage = "Peer disconnected (${state.peerAddress})",
-                                    errorMessage = "Peer ${state.peerAddress} disconnected."
+                                    isConnected = false,
+                                    rawDistanceMeters = null,
+                                    smoothedDistanceMeters = null,
+                                    proximityZone = null,
+                                    statusMessage = "Qorvo Board Disconnected (Session Ready)",
+                                    errorMessage = null
                                 )
                             }
                         }
@@ -146,17 +154,20 @@ class TrackerViewModel(
                         is RangingState.Error -> {
                             _uiState.update { current ->
                                 current.copy(
-                                    statusMessage = "Tracking Error",
-                                    errorMessage = state.message,
-                                    mode = TrackingMode.SIMULATED
+                                    isConnected = false,
+                                    statusMessage = "Hardware Error",
+                                    errorMessage = state.message
                                 )
                             }
-                            // Gracefully fallback to simulated mode on hardware/system error
-                            startTracking(TrackingMode.SIMULATED)
                         }
 
-                        is RangingState.Idle -> {
-                            // No-op
+                        RangingState.Idle -> {
+                            _uiState.update { current ->
+                                current.copy(
+                                    isConnected = false,
+                                    statusMessage = "Idle"
+                                )
+                            }
                         }
                     }
                 }

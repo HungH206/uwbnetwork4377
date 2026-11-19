@@ -1,5 +1,8 @@
 package com.example.uwbextracredit4377.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -21,6 +24,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -45,14 +49,12 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.uwbextracredit4377.data.TrackingMode
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TrackerDashboard(
     uiState: TrackerUiState,
-    onToggleMode: (Boolean) -> Unit,
-    onTogglePhoneRole: (Boolean) -> Unit,
+    onToggleTracking: (Boolean) -> Unit,
     onPeerAddressChanged: (String) -> Unit,
     onRequestPermissions: () -> Unit,
     hasPermissions: Boolean,
@@ -93,17 +95,16 @@ fun TrackerDashboard(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Mode Selector Card
-            ModeToggleCard(
-                mode = uiState.mode,
-                isPhoneController = uiState.isPhoneController,
+            // Tracking Active Toggle Card
+            TrackingStatusCard(
+                isActive = uiState.isLiveTrackingActive,
+                isConnected = uiState.isConnected,
                 onToggle = { isChecked ->
                     if (isChecked && !hasPermissions) {
                         onRequestPermissions()
                     }
-                    onToggleMode(isChecked)
-                },
-                onRoleToggle = onTogglePhoneRole
+                    onToggleTracking(isChecked)
+                }
             )
 
             // Warning Banner if permission or hardware error occurred
@@ -119,20 +120,36 @@ fun TrackerDashboard(
                 onDone = { focusManager.clearFocus() }
             )
 
-            // Primary Live Distance Readout Card
-            LiveDistanceCard(
-                smoothedMeters = uiState.smoothedDistanceMeters,
-                rawMeters = uiState.rawDistanceMeters,
-                distanceCm = uiState.distanceInCm,
-                zone = uiState.proximityZone,
-                azimuth = uiState.azimuthDegrees
-            )
+            // Pure Hardware Display:
+            // If connected to Qorvo board, show real-time distance and sparkline graph.
+            // If disconnected, show clean waiting state with NO simulated values or graphs.
+            AnimatedVisibility(
+                visible = uiState.isConnected && uiState.smoothedDistanceMeters != null,
+                enter = fadeIn(),
+                exit = fadeOut()
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    LiveDistanceCard(
+                        smoothedMeters = uiState.smoothedDistanceMeters,
+                        rawMeters = uiState.rawDistanceMeters,
+                        distanceCm = uiState.distanceInCm,
+                        zone = uiState.proximityZone,
+                        azimuth = uiState.azimuthDegrees
+                    )
 
-            // Live Distance Trend Sparkline
-            DistanceSparkline(
-                history = uiState.distanceHistory,
-                currentZone = uiState.proximityZone
-            )
+                    DistanceSparkline(
+                        history = uiState.distanceHistory,
+                        currentZone = uiState.proximityZone
+                    )
+                }
+            }
+
+            if (!uiState.isConnected) {
+                WaitingForBoardCard(
+                    localAddress = uiState.localAddress,
+                    isSessionActive = uiState.isLiveTrackingActive
+                )
+            }
 
             // Session Configuration & Status Card
             HardwareInfoCard(
@@ -143,11 +160,10 @@ fun TrackerDashboard(
 }
 
 @Composable
-private fun ModeToggleCard(
-    mode: TrackingMode,
-    isPhoneController: Boolean,
-    onToggle: (Boolean) -> Unit,
-    onRoleToggle: (Boolean) -> Unit
+private fun TrackingStatusCard(
+    isActive: Boolean,
+    isConnected: Boolean,
+    onToggle: (Boolean) -> Unit
 ) {
     ElevatedCard(
         shape = RoundedCornerShape(16.dp),
@@ -156,83 +172,108 @@ private fun ModeToggleCard(
         ),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp)
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(10.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    if (mode == TrackingMode.LIVE_HARDWARE) Color(0xFF2E7D32) else Color(0xFF1976D2)
-                                )
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = if (mode == TrackingMode.LIVE_HARDWARE) "Live Qorvo UWB" else "Simulated Mode",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(4.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(
+                                when {
+                                    !isActive -> Color.Gray
+                                    isConnected -> Color(0xFF2E7D32)
+                                    else -> Color(0xFFF57C00)
+                                }
+                            )
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = if (mode == TrackingMode.LIVE_HARDWARE) {
-                            "DWM3001CDK (Channel 9, Preamble 9, Session 42)"
-                        } else {
-                            "Default: Cycling 0.3m – 3.5m at 5 Hz (No board needed)"
+                        text = when {
+                            !isActive -> "UWB Tracking Off"
+                            isConnected -> "Qorvo Board Connected"
+                            else -> "UWB Active • Waiting for Board"
                         },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
                     )
                 }
-
-                Switch(
-                    checked = mode == TrackingMode.LIVE_HARDWARE,
-                    onCheckedChange = onToggle,
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = MaterialTheme.colorScheme.primary,
-                        checkedTrackColor = MaterialTheme.colorScheme.primaryContainer
-                    )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = if (isActive) {
+                        "Channel 9 • Preamble 9 • Session 42 (120ms)"
+                    } else {
+                        "Toggle switch to start UWB session"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
-            if (mode == TrackingMode.LIVE_HARDWARE) {
-                Spacer(modifier = Modifier.height(12.dp))
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-                Spacer(modifier = Modifier.height(8.dp))
+            Switch(
+                checked = isActive,
+                onCheckedChange = onToggle,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = MaterialTheme.colorScheme.primary,
+                    checkedTrackColor = MaterialTheme.colorScheme.primaryContainer
+                )
+            )
+        }
+    }
+}
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column {
-                        Text(
-                            text = "Phone Role: ${if (isPhoneController) "Controller (Initiator)" else "Controlee (Responder)"}",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = if (isPhoneController) "Phone sends Poll -> Board replies" else "Board sends Poll -> Phone replies",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    Switch(
-                        checked = isPhoneController,
-                        onCheckedChange = onRoleToggle
-                    )
-                }
+@Composable
+private fun WaitingForBoardCard(
+    localAddress: String,
+    isSessionActive: Boolean
+) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+        ),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            if (isSessionActive) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(36.dp),
+                    strokeWidth = 3.dp,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "No Board Connected",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Start Python script targeting destination MAC '$localAddress' to view live distance.",
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                Text(
+                    text = "Tracking Paused",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }
@@ -272,7 +313,7 @@ private fun AddressesCard(
             ) {
                 Column {
                     Text(
-                        text = "Phone Local Address (Controlee)",
+                        text = "Phone Local Address (Controller)",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -325,12 +366,6 @@ private fun AddressesCard(
                         focusedBorderColor = MaterialTheme.colorScheme.primary,
                         unfocusedBorderColor = MaterialTheme.colorScheme.outline
                     )
-                )
-                Text(
-                    text = "Format: XX:XX (e.g. 00:00 or 12:34)",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    modifier = Modifier.padding(top = 4.dp)
                 )
             }
         }
@@ -458,25 +493,23 @@ private fun ZoneIndicatorPill(zone: ProximityZone, isCurrent: Boolean) {
                 color = if (isCurrent) zone.color else Color.Transparent,
                 shape = RoundedCornerShape(8.dp)
             )
-            .padding(horizontal = 10.dp, vertical = 4.dp)
+            .padding(horizontal = 12.dp, vertical = 6.dp)
     ) {
         Text(
-            text = zone.label,
+            text = "${zone.label} (${zone.description})",
             style = MaterialTheme.typography.labelSmall,
             fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
-            color = zone.color.copy(alpha = alpha)
+            color = if (isCurrent) zone.color else zone.color.copy(alpha = 0.7f)
         )
     }
 }
 
 @Composable
-private fun HardwareInfoCard(
-    statusMessage: String
-) {
+private fun HardwareInfoCard(statusMessage: String) {
     Card(
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
         ),
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -487,50 +520,43 @@ private fun HardwareInfoCard(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(
-                text = "FiRa Profile Specifications",
-                style = MaterialTheme.typography.labelLarge,
+                text = "FiRa 2.0 Live Configuration",
+                style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(text = "Ranging Profile:", style = MaterialTheme.typography.bodySmall)
-                Text(text = "FiRa DS-TWR (Unicast)", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                Text(text = "Ranging Profile", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(text = "Unicast DS-TWR (Static STS)", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
             }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(text = "RF Channel / Preamble:", style = MaterialTheme.typography.bodySmall)
-                Text(text = "Channel 9 / Preamble 9", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                Text(text = "RF Channel / Preamble", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(text = "Channel 9 / Code 9", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
             }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(text = "Session ID:", style = MaterialTheme.typography.bodySmall)
-                Text(text = "42", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                Text(text = "Session ID / Interval", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(text = "42 / 120 ms", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(text = "Filter:", style = MaterialTheme.typography.bodySmall)
-                Text(text = "5-Sample Rolling Average", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
-            }
-
-            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
             Text(
                 text = "Status: $statusMessage",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Medium
             )
         }
     }
@@ -538,18 +564,24 @@ private fun HardwareInfoCard(
 
 @Composable
 private fun ErrorMessageBanner(message: String) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.errorContainer)
-            .padding(12.dp)
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer
+        ),
+        modifier = Modifier.fillMaxWidth()
     ) {
-        Text(
-            text = message,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onErrorContainer,
-            textAlign = TextAlign.Start
-        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer
+            )
+        }
     }
 }

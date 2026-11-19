@@ -81,9 +81,7 @@ fun TrackerApp(
         val allGranted = results.values.all { it }
         hasPermissions = allGranted
         if (!allGranted) {
-            viewModel.fallbackToSimulated(
-                "Permissions denied (UWB_RANGING / Bluetooth). Falling back gracefully to Simulated Mode."
-            )
+            viewModel.toggleTracking(false)
         }
     }
 
@@ -98,19 +96,16 @@ fun TrackerApp(
 
     TrackerDashboard(
         uiState = uiState,
-        onToggleMode = { isLive ->
-            if (isLive) {
+        onToggleTracking = { isActive ->
+            if (isActive) {
                 if (!hasPermissions) {
                     permissionLauncher.launch(MainActivity.getRequiredPermissions())
                 } else {
-                    viewModel.toggleMode(true)
+                    viewModel.toggleTracking(true)
                 }
             } else {
-                viewModel.toggleMode(false)
+                viewModel.toggleTracking(false)
             }
-        },
-        onTogglePhoneRole = { asController ->
-            viewModel.togglePhoneRole(asController)
         },
         onPeerAddressChanged = { newAddress ->
             viewModel.setPeerAddress(newAddress)
