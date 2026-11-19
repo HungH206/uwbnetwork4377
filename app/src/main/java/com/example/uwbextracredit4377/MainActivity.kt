@@ -60,7 +60,8 @@ class MainActivity : ComponentActivity() {
             return arrayOf(
                 Manifest.permission.UWB_RANGING,
                 Manifest.permission.BLUETOOTH_SCAN,
-                Manifest.permission.BLUETOOTH_CONNECT
+                Manifest.permission.BLUETOOTH_CONNECT,
+                Manifest.permission.BLUETOOTH_ADVERTISE
             )
         }
     }
