@@ -21,13 +21,23 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import com.example.uwbextracredit4377.data.UwbTrackerRepository
 import com.example.uwbextracredit4377.ui.TrackerDashboard
 import com.example.uwbextracredit4377.ui.TrackerViewModel
 import com.example.uwbextracredit4377.ui.theme.UWBExtraCredit4377Theme
 
 class MainActivity : ComponentActivity() {
 
-    private val viewModel: TrackerViewModel by viewModels()
+    private val viewModel: TrackerViewModel by viewModels {
+        object : ViewModelProvider.Factory {
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                @Suppress("UNCHECKED_CAST")
+                return TrackerViewModel(UwbTrackerRepository(applicationContext)) as T
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
